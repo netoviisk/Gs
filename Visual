@@ -1,0 +1,127 @@
+import tkinter as tk
+from tkinter import ttk
+from supabase import create_client, Client
+from datetime import datetime
+import pytz
+from PIL import Image, ImageTk
+import requests  # Biblioteca para fazer requisições HTTP
+
+# Configurações do Supabase
+url: str = "https://mcyqyosrflmvzpfnwxnj.supabase.co"
+anon_key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1jeXF5b3NyZmxtdnpwZm53eG5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjcxMzA3NzUsImV4cCI6MjA0MjcwNjc3NX0.H1_Jj0ITk7KD02xuND8brh1PRKtXeXnxihYmWkyFsKc"
+
+# Endereço IP do ESP-12
+ESP_IP = "http://192.168.1.9"  # Substitua pelo IP do seu ESP-12
+
+
+def format_date(data_hora):
+    """Formata a data e hora para o horário de Brasília."""
+    try:
+        dt = datetime.fromisoformat(data_hora)
+        brasilia_tz = pytz.timezone('America/Sao_Paulo')
+        dt_brasilia = dt.astimezone(brasilia_tz)
+        return dt_brasilia.strftime("%d/%m/%Y %H:%M:%S")
+    except ValueError:
+        return "Data Inválida"
+
+
+def get_data_from_supabase():
+    """Função para buscar os dados do Supabase."""
+    supabase: Client = create_client(url, anon_key)
+    response = supabase.table('leituras_gas').select('*').order('data_hora', desc=True).execute()
+
+    if response.data:
+        print("Dados retornados:", response.data)
+        return response.data
+    elif response.error:
+        print("Erro ao buscar dados:", response.error.message)
+        return []
+    else:
+        return []
+
+
+def update_table(tree):
+    """Atualiza os dados da tabela na interface."""
+    for row in tree.get_children():
+        tree.delete(row)
+
+    data = get_data_from_supabase()
+
+    for entry in data:
+        data_value = format_date(entry.get('data_hora', 'Sem Data'))
+        valor_leitura = entry.get('valor_leitura', 'N/A')
+        alarme = entry.get('alarme', 'N/A')
+
+        tree.insert('', 'end', values=(data_value, valor_leitura, alarme))
+
+
+def toggle_buzzer(state):
+    """Desliga o buzzer no ESP-12."""
+    try:
+        if state == "desligar":
+            requests.post(f"{ESP_IP}/post", json={"action": "desligar"})
+            print("Buzzer desligado.")
+    except requests.exceptions.RequestException as e:
+        print(f"Erro na requisição: {e}")
+
+
+def main_interface():
+    root = tk.Tk()
+    root.title("Monitoramento de Gás")
+    root.attributes('-fullscreen', True)  # Inicia em tela cheia
+
+    # Caminho da imagem
+    image_path = "C:/Users/SENAI/Documents/ALUNO/kayky/GaSecuryt/Logo.png"
+
+    # Carrega a imagem
+    image = Image.open(image_path)
+    image = image.resize((200, 200), Image.Resampling.LANCZOS)
+    photo = ImageTk.PhotoImage(image)
+
+    # Substitui o título por uma imagem
+    img_label = tk.Label(root, image=photo)
+    img_label.image = photo  # Mantém referência para não ser removida pelo garbage collector
+    img_label.pack(pady=10)
+
+    # Adiciona o texto "GaSecury" abaixo da imagem
+    title_label = tk.Label(root, text="GaSecury", font=("Helvetica", 16, "bold"))
+    title_label.pack(pady=5)
+
+    # Criação da tabela
+    columns = ('Data e Hora', 'Valor da Leitura', 'Alarme')
+    tree = ttk.Treeview(root, columns=columns, show='headings')
+
+    tree.heading('Data e Hora', text='Data e Hora')
+    tree.heading('Valor da Leitura', text='Valor da Leitura')
+    tree.heading('Alarme', text='Alarme')
+
+    tree.column('Data e Hora', width=200)
+    tree.column('Valor da Leitura', width=150)
+    tree.column('Alarme', width=100)
+
+    tree.pack(pady=20)
+
+    # Estilo dos botões
+    button_style = ttk.Style()
+    button_style.configure("TButton", font=("Helvetica", 12, "bold"), padding=10)
+
+    # Botão para atualizar tabela
+    update_button = ttk.Button(root, text="Atualizar Dados", command=lambda: update_table(tree), style="TButton")
+    update_button.pack(pady=10)
+
+    # Botão para desligar o buzzer
+    desligar_button = ttk.Button(root, text="Desligar Buzzer", command=lambda: toggle_buzzer("desligar"), style="TButton")
+    desligar_button.pack(pady=5)
+
+    # Botão para sair
+    exit_button = ttk.Button(root, text="Sair", command=root.quit, style="TButton")
+    exit_button.pack(pady=5)
+
+    # Atualiza a tabela ao iniciar a interface
+    update_table(tree)
+
+    root.mainloop()
+
+
+# Executa a interface
+main_interface()
