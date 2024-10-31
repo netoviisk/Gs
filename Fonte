@@ -1,0 +1,144 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <WiFiClientSecureBearSSL.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+#include <time.h> // Para trabalhar com time e NTP
+
+// Dados do WiFi
+#define WIFI_SSID "Jorgeferreirafilho"
+#define WIFI_PASSWORD "343431525"
+
+// Define os pinos do sensor de gás digital e do buzzer
+#define GAS_SENSOR_PIN 4  // GPIO4 (D2) no ESP-12
+#define BUZZER_PIN 5      // GPIO5 (D1) no ESP-12
+
+// Dados do Supabase
+const char* supabaseUrl = "https://mcyqyosrflmvzpfnwxnj.supabase.co";
+const char* supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1jeXF5b3NyZmxtdnpwZm53eG5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjcxMzA3NzUsImV4cCI6MjA0MjcwNjc3NX0.H1_Jj0ITk7KD02xuND8brh1PRKtXeXnxihYmWkyFsKc";
+
+ESP8266WebServer server(80); // Servidor na porta 80
+bool flag = 1;
+bool timeSynced = false;  // Variável para garantir que o tempo seja sincronizado uma vez
+
+// Função para obter e exibir o tempo formatado
+void printLocalTime() {
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);  // Converte o timestamp para a hora local
+
+    if (timeinfo.tm_year > (1970 - 1900)) {
+        char buffer[80];
+        strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);  // Formata a data e hora
+        Serial.print("Local time: ");
+        Serial.println(buffer);  // Exibe a hora formatada
+    } else {
+        Serial.println("Falha ao obter tempo");
+    }
+}
+
+// Função para enviar dados para o Supabase
+void enviarDadosParaSupabase(float valor_leitura, bool alarme) {
+    WiFiClientSecure client;
+    HTTPClient http;
+
+    client.setInsecure();  // Ignora a verificação de certificado SSL
+
+    // URL da função de inserção no Supabase
+    String url = String(supabaseUrl) + "/rest/v1/leituras_gas";
+    http.begin(client, url);
+    http.addHeader("apikey", supabaseKey);
+    http.addHeader("Content-Type", "application/json");
+
+    // JSON para inserir os dados
+    StaticJsonDocument<200> doc;
+    doc["valor_leitura"] = valor_leitura;
+    doc["alarme"] = alarme;
+
+    String payload;
+    serializeJson(doc, payload);
+
+    int httpCode = http.POST(payload);
+    if (httpCode > 0) {
+        Serial.printf("Dados enviados com sucesso! Código HTTP: %d\n", httpCode);
+    } else {
+        Serial.printf("Erro ao enviar dados. Código de erro: %s\n", http.errorToString(httpCode).c_str());
+    }
+    http.end();
+}
+
+void handlePost() {
+    // Lógica para lidar com a requisição POST
+    String message = "Requisição recebida";
+    server.send(200, "text/plain", message);
+}
+
+void setup() {
+    pinMode(GAS_SENSOR_PIN, INPUT);  // Define o pino do sensor como entrada
+    pinMode(BUZZER_PIN, OUTPUT);     // Define o pino do buzzer como saída
+    digitalWrite(BUZZER_PIN, LOW);   // Garante que o buzzer esteja desligado inicialmente
+
+    Serial.begin(115200);
+    Serial.println();
+
+    // Conexão à rede Wi-Fi
+    Serial.print("Connecting to WiFi SSID ");
+    Serial.print(WIFI_SSID);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.print(".");
+        delay(500);
+    }
+    Serial.print("\nWiFi connected. IP address: ");
+    Serial.println(WiFi.localIP());
+
+    // Configuração de tempo NTP com fuso horário (ajuste de 3 horas para o horário de Brasília)
+    configTime(-3 * 3600, 0, "0.br.pool.ntp.org", "1.br.pool.ntp.org", "time.nist.gov");  // Fuso horário de Brasília (-3 horas)
+
+    // Aguarda até que o tempo esteja sincronizado
+    Serial.print("Retrieving time: ");
+    while (!time(nullptr)) {
+        Serial.print(".");
+        delay(1000);
+    }
+
+    // Exibe o tempo sincronizado apenas uma vez
+    printLocalTime();
+    timeSynced = true;  // Marca como sincronizado
+
+    // Configuração do servidor
+    server.on("/post", HTTP_POST, handlePost); // Define a rota para o POST
+    server.begin(); // Inicia o servidor
+}
+
+void loop() {
+    server.handleClient(); // Mantém o servidor ativo
+
+    // Ler o estado do sensor de gás
+    int gasState = digitalRead(GAS_SENSOR_PIN);
+
+    // Verifica se o gás foi detectado
+    if (gasState == LOW) {  // LOW indica que gás foi detectado
+        if (flag) {
+            Serial.println("Gás Detectado");
+            // Ativa o buzzer com apitos de 5 segundos de intervalo
+            for (int i = 0; i < 5; i++) {  // Apitará 5 vezes
+                digitalWrite(BUZZER_PIN, HIGH);  // Liga o buzzer
+                delay(1000);  // Mantém ligado por 1 segundo
+                digitalWrite(BUZZER_PIN, LOW);   // Desliga o buzzer
+                delay(5000);  // Intervalo de 5 segundos entre os apitos
+            }
+            // Envia os dados para o Supabase com alarme ativado
+            enviarDadosParaSupabase(1.0, true);
+            flag = 0;  // Evita apitar repetidamente sem necessidade
+        }
+    } else {
+        flag = 1;  // Reseta o flag para permitir novas notificações
+        // Envia os dados para o Supabase com alarme desativado
+        enviarDadosParaSupabase(0.0, false);
+    }
+
+    // Delay de 500 ms para reduzir a quantidade de leitura
+    delay(500);
+}
